@@ -31,6 +31,21 @@ If native delegation or Luna is unavailable or blocked, expect a clear limitatio
 and targeted direct work. No automatic CLI retry, model substitution, or API-key
 fallback should occur. Do not change approval controls to force a smoke test.
 
+## Hook check
+
+Create a file over the threshold and ask for it whole:
+
+```sh
+python3 -c "open('big.py','w').write('value = 1\n' * 250)"
+```
+
+> Print big.py with cat and tell me how many lines it has.
+
+Expect the command to be denied with a reason that names `kirby_luna_bulk_reader`,
+and expect Codex to spawn the reader instead of trying `head`, `sed`, or the Read
+tool. If the read goes through, the hook is not trusted yet: open `/hooks`, trust
+the Kirby entry, and start a new task. `head -n 20 big.py` should still be allowed.
+
 ## Optional CLI check
 
 Run this separately only when you explicitly want to test the CLI and authorize

@@ -7,7 +7,9 @@ description: Delegate substantial file reading and only basic mechanical boilerp
 
 Use native Codex subagents for bounded work that can run independently alongside
 useful work by the main model. This skill explicitly requests that delegation.
-Keep the selected main model unchanged. Roughly 350 source lines may signal a useful reading task.
+Keep the selected main model unchanged. Any file over 200 lines, or a question that
+spans three or more files, goes to the reader. A hook denies reads over that size and
+names the reader as the way through; do not fetch the same file through another command.
 Output size must not qualify a writing task.
 
 ## Native reader and writer

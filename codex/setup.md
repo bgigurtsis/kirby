@@ -8,37 +8,56 @@ your selected main model or falls back to API-key billing.
 
 Run `python3 codex/install.py install` from the checkout. The destination is
 `$CODEX_HOME`, or `~/.codex` when unset. Use `--codex-home /path/to/home` to choose
-another home. Install separately on remote hosts. Start a new task afterward.
+another home. Install separately on remote hosts.
 
 ```text
 agents/kirby_luna_bulk_reader.toml
 agents/kirby_luna_code_writer.toml
 skills/kirby-luna/SKILL.md
 skills/kirby-luna/scripts/kirby.py
+skills/kirby-luna/scripts/read_hook.py
+hooks.json                              (one PreToolUse entry added)
 kirby/install.json
 ```
 
 The reader and writer use `gpt-5.6-luna` with medium reasoning effort. One marked
 routing block is added to global `AGENTS.md`, or an existing nonempty
-`AGENTS.override.md`. Existing instructions, `config.toml`, and sign-in are
-preserved. No blocking hooks are installed.
+`AGENTS.override.md`. It tells the model to spawn `kirby_luna_bulk_reader` before
+reading any file over 200 lines or when a question spans three or more files.
+Existing instructions, `config.toml`, and sign-in are preserved.
 
-The skill requests native delegation for bounded, independent work while the
-main model makes useful progress. If delegation is unavailable or blocked, the
-main model reports the limitation and proceeds with targeted direct work. It
-must not automatically send the same material through the optional CLI.
+## Hook activation
+
+The installer adds one `PreToolUse` entry to `hooks.json`, labelled
+`Kirby: redirect large whole-file reads`, and records it so that uninstall removes
+only that entry. Codex runs a new hook only after you trust it. Open `/hooks` in
+Codex, review the entry, trust it, and start a new task.
+
+The hook denies a shell command or file read that would put more than 200 lines
+into context and names the native reader as the way through. It follows `cd`
+inside the command, expands globs, adds up several files, understands `head`,
+`tail`, and `sed -n` counts, and treats `2>&1` as still printing. Output that goes
+to a pipe or a file is not counted, except through `cat`, `less`, `more`, and `tee`.
+`KIRBY_CODEX_MIN_LINES` changes the threshold and `KIRBY_CODEX_DISABLE=1` switches
+the guard off; the older `SIDETRACK_CODEX_*` names still work. Events from a Luna
+main model pass through so delegated workers can read.
+
+If delegation is unavailable or blocked, the main model reports the limitation and
+proceeds with targeted reads under the threshold. It must not automatically send
+the same material through the optional CLI.
 
 ## Updates and migration
 
 Pull the latest checkout and run the installer again. Identical installs are a
-no-op. Recorded v1 native, v2 CLI, and v3 CLI-with-hook installations migrate to
-v4 native routing. Changed and retired files are backed up under dated
+no-op. Recorded v1 native, v2 CLI, v3 CLI-with-hook, and v4 advisory installations
+migrate to v5. Changed and retired files are backed up under dated
 `kirby/backups/` directories. The CLI remains available for explicit optional use.
 
-For v3, migration removes only the exact recorded Kirby hook entry and archives
-the retired read-hook script. Unrelated hooks survive. Ownership is checked before
-files change; unowned targets or user edits to managed files cause a conflict
-instead of being overwritten. Custom agents outside the record are not removed.
+Migration replaces only the exact recorded Kirby hook entry. Unrelated hooks
+survive. Ownership is checked before files change; unowned targets or user edits
+to managed files cause a conflict instead of being overwritten. Custom agents
+outside the record are not removed. A changed or removed Kirby hook entry stops
+install and uninstall until you restore or remove it by hand.
 
 Run `python3 codex/install.py uninstall` to remove active Kirby files and its
 routing block. Backups remain recoverable. `--dry-run` previews install or removal.
@@ -77,7 +96,9 @@ See [Codex rules](https://learn.chatgpt.com/docs/agent-configuration/rules).
 
 ## Troubleshooting
 
-- Use `python3 codex/install.py status` to verify installed files.
+- Use `python3 codex/install.py status` to verify installed files and the hook entry.
+- If large reads still go through, the hook is not trusted yet. Open `/hooks`,
+  trust the Kirby entry, and start a new task.
 - Check that the client exposes native subagents and Luna. Start a new task after
   installation. Use direct work if the required capability is unavailable; do not
   silently change transport, model, or authentication.

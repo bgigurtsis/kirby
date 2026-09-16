@@ -6,8 +6,8 @@ sign-in, with no Portal or API key.
 
 | Client | Worker | Routing |
 | --- | --- | --- |
-| Claude Code | Haiku, or Luna with an OpenAI key (opt-in) | Hooks redirect large reads; skills handle basic boilerplate |
-| Codex | Native Luna subagents | `AGENTS.md` and a skill request bounded, independent reading and basic boilerplate alongside useful main-model work. Advisory |
+| Claude Code | Haiku, or Luna with an OpenAI key (opt-in) | A session rule, `kirby_read` and `kirby_write` tools, and hooks that refuse reads over 200 lines |
+| Codex | Native Luna subagents | An `AGENTS.md` rule, native reader and writer agents, and a hook that denies reads over 200 lines |
 
 ## Install
 
@@ -26,7 +26,8 @@ cd kirby
 python3 codex/install.py install
 ```
 
-On Windows, use `py -3` instead of `python3`. Start a new task after installing.
+On Windows, use `py -3` instead of `python3`. Then open Codex `/hooks`, trust the
+Kirby entry, and start a new task.
 
 Codex defaults to native Luna reader and writer agents. The CLI remains optional
 for explicitly requested, authorized calls. `install --allow-luna` adds an opt-in
@@ -51,11 +52,15 @@ Read the [consent scope and Windows wrapper limitation](codex/setup.md) first.
 Small tasks stay with the main model. Debugging, architecture, and final review
 stay there too.
 
-The two clients enforce this differently. In Claude Code a hook runs before every
-file read and refuses reads over 350 lines, so the model has to delegate or read a
-smaller slice. Codex has no hooks, so the installer adds a standing note to
-`AGENTS.md` asking the model to delegate. It usually does, but nothing stops it
-reading a big file directly. If native delegation or Luna is unavailable or blocked,
+Both clients get the same three pieces. A standing rule in context says what to
+delegate. The worker is in the tool list, as `kirby_read` and `kirby_write` in
+Claude Code and as the native reader and writer agents in Codex. A hook runs before
+every file read and shell command and refuses anything that would put more than
+200 lines into context, naming the delegate as the way through. The hooks follow
+`cd`, expand globs, add up several files, and read `head`, `tail`, and `sed -n`
+counts. An earlier version relied on skill descriptions in Claude Code and on an
+advisory note in Codex, and ten days of transcripts showed the model never
+delegating on its own. If native delegation or Luna is unavailable or blocked,
 Codex reports that and continues with targeted direct work, without an automatic
 CLI retry. Installation migrates recorded older Codex workflows and removes only
 Kirby's recorded read hook. Workers consume subscription allowance; savings vary

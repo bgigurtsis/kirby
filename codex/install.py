@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install Kirby's native Luna subagents, routing skill, and optional CLI."""
+"""Install Kirby's native Luna subagents, routing rule, read hook, and optional CLI."""
 
 import argparse
 import hashlib
@@ -13,16 +13,25 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 SOURCE = Path(__file__).resolve().parent
+sys.path.insert(0, str(SOURCE))
+import hook_config  # noqa: E402
+import read_hook  # noqa: E402
+
+THRESHOLD = read_hook.DEFAULT_THRESHOLD
 ASSETS = (
     "skills/kirby-luna/scripts/kirby.py",
     "skills/kirby-luna/SKILL.md",
     "agents/kirby_luna_bulk_reader.toml",
     "agents/kirby_luna_code_writer.toml",
+    hook_config.HOOK_PATH,
 )
 CLI_ASSETS = ASSETS[:2]
-READ_HOOK = "skills/kirby-luna/scripts/read_hook.py"
+AGENT_ASSETS = ASSETS[2:4]
+NATIVE_ASSETS = ASSETS[:4]
+READ_HOOK = ASSETS[4]
 SOURCES = {name: name for name in ASSETS}
 SOURCES[ASSETS[0]] = "cli.py"
+SOURCES[READ_HOOK] = "read_hook.py"
 LEGACY_ASSETS = (
     "agents/kirby_luna_bulk_reader.toml",
     "agents/kirby_luna_code_writer.toml",
@@ -35,21 +44,33 @@ END = "<!-- kirby:codex:end -->"
 BLOCK = f"""{START}
 ## Kirby: Luna delegation
 
-Use the `kirby-luna` skill for substantial file reading and only basic mechanical
-boilerplate writes. This is a standing request to delegate suitable bounded tasks to
-native Codex Luna subagents while the main model continues useful independent work.
-Use `kirby_luna_bulk_reader` or `kirby_luna_code_writer`; where the native tool
-accepts model selection instead of custom agents, select `gpt-5.6-luna` with medium
-reasoning and a focused prompt. Pass relevant paths and a question or specification.
+Reading rules for every task:
+
+- Before reading any file over {THRESHOLD} lines, or when one question spans three or more
+  files, spawn `kirby_luna_bulk_reader` with the paths and a focused question. It returns
+  short findings with line references and the files never enter your context. Use it for
+  that job instead of cat, Get-Content, sed, head, tail, or a whole-file read.
+- A hook denies any read that would put more than {THRESHOLD} lines into context. The native
+  reader is the way through; a different read command is not.
+- For follow-up questions spawn the reader again with the same paths.
+- Read a file yourself only when you need exact lines to edit, and then only the range the
+  reader pointed you to.
+- For a new file that copies an existing one with literal substitutions (mirrored tests,
+  fixtures, config entries, stubs), spawn `kirby_luna_code_writer` with the reference, the
+  target path, and every substitution, then review the diff.
+
+This is a standing request to delegate to native Codex Luna subagents while the main model
+continues useful independent work. Where the native tool accepts model selection instead of
+custom agents, select `gpt-5.6-luna` with medium reasoning and a focused prompt.
 Writers must copy an exact reference with explicit substitutions and no implementation choices.
 The main model must handle new logic, refactors, debugging, integrations, and security-sensitive changes.
 Workers must return ambiguous or complex tasks without writing files.
 Output size and detailed specs must not override these limits.
-Keep the selected main model for reasoning, integration, and review. Prefer direct
-targeted reads for small tasks. Skip recursive invocation and automatic routing
-when the main model is Luna or this is already a delegated worker. If native Luna
-delegation is unavailable, report that and continue directly. Follow the current
-user's instructions. Do not automatically launch a separate CLI process as fallback.
+Keep the selected main model for reasoning, integration, and review. Skip recursive
+invocation and automatic routing when the main model is Luna or this is already a delegated
+worker. If native Luna delegation is unavailable, report that and continue directly with
+targeted reads under {THRESHOLD} lines. Follow the current user's instructions. Do not
+automatically launch a separate CLI process as fallback.
 
 Kirby is the renamed Sidetrack workflow. Its current skill is `kirby-luna` and
 its optional CLI is `skills/kirby-luna/scripts/kirby.py`. Use that CLI only when
@@ -89,43 +110,19 @@ def read_state(root):
     if not path.exists():
         return None
     state = json.loads(path.read_text(encoding="utf-8"))
-    expected = {1: set(LEGACY_ASSETS), 2: set(CLI_ASSETS),
-                3: set(CLI_ASSETS) | {READ_HOOK}, 4: set(ASSETS)}.get(state.get("version"))
+    expected = {1: set(LEGACY_ASSETS), 2: set(CLI_ASSETS), 3: set(CLI_ASSETS) | {READ_HOOK},
+                4: set(NATIVE_ASSETS), 5: set(ASSETS)}.get(state.get("version"))
     actual = set(state.get("hashes", {}))
     if (expected is None or (actual != expected and not (
-            state.get("version") in (2, 3, 4) and actual == expected | {RULE}))
+            state.get("version") in (2, 3, 4, 5) and actual == expected | {RULE}))
             or state.get("instructions") not in ("AGENTS.md", "AGENTS.override.md")
             or not isinstance(state.get("block"), str)
             or not state["block"].startswith(START)
             or not state["block"].endswith(END)):
         raise InstallError("Unrecognized Kirby installation record; no files changed.")
-    if state["version"] == 3 and not isinstance(state.get("hook_entry"), dict):
+    if state["version"] in (3, 5) and not isinstance(state.get("hook_entry"), dict):
         raise InstallError("Missing managed Kirby hook record; no files changed.")
     return state
-
-
-def retired_hook_changes(root, state):
-    """Remove only the v3 routing hook; preserve all unrelated hook settings."""
-    if not state or state["version"] != 3:
-        return {}
-    path = target(root, "hooks.json")
-    original = route_text(path)
-    config = json.loads(original)
-    hooks = config.get("hooks") if isinstance(config, dict) else None
-    entries = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
-    if not isinstance(entries, list) or entries.count(state["hook_entry"]) != 1:
-        raise InstallError("Managed Kirby hook changed or missing; no files changed.")
-    entries.remove(state["hook_entry"])
-    if not entries:
-        del hooks["PreToolUse"]
-    if not hooks:
-        del config["hooks"]
-    content = json.dumps(config, indent=2) + "\n"
-    # Restore original formatting only if no unrelated configuration would be lost.
-    before = state.get("hooks_before")
-    if isinstance(before, str) and json.loads(before) == config:
-        content = before
-    return {"hooks.json": content.encode("utf-8")}
 
 
 def check_owned(root, state):
@@ -192,7 +189,6 @@ def install(root, dry_run=False, allow_luna=False):
     state = read_state(root)
     if state:
         check_owned(root, state)
-    hook_changes = retired_hook_changes(root, state)
     # Keep installed assets stable across Git's Windows newline conversion.
     assets = {name: (SOURCE / SOURCES[name]).read_bytes().replace(b"\r\n", b"\n") for name in ASSETS}
     if allow_luna:
@@ -209,10 +205,15 @@ def install(root, dry_run=False, allow_luna=False):
         print("Luna allow rule covers direct interpreter + installed script calls only.")
         print("PowerShell -Command wrappers do not match; other policies still apply. Restart Codex after installation.")
     compile(assets[ASSETS[0]], ASSETS[0], "exec")
-    for name in ASSETS[2:]:
+    compile(assets[READ_HOOK], READ_HOOK, "exec")
+    for name in AGENT_ASSETS:
         agent = tomllib.loads(assets[name].decode("utf-8"))
         if not all(agent.get(key) for key in ("name", "description", "developer_instructions")):
             raise InstallError(f"Incomplete native agent: {name}")
+    hook_path = target(root, "hooks.json")
+    hooks_before = (state["hooks_before"] if state and "hooks_before" in state else
+                    hook_path.read_bytes().decode("utf-8") if hook_path.exists() else None)
+    hook_data, hook_entry = hook_config.prepare(root, state, assets[READ_HOOK])
     override = target(root, "AGENTS.override.md")
     instructions = (state["instructions"] if state else
                     "AGENTS.override.md" if override.exists() and override.stat().st_size else "AGENTS.md")
@@ -234,9 +235,10 @@ def install(root, dry_run=False, allow_luna=False):
         if dest.exists() and (not state or name not in state["hashes"]):
             raise InstallError(f"Refusing to overwrite an unowned file: {dest}")
     retired = tuple(name for name in state["hashes"] if name not in assets) if state else ()
-    record = {"version": 4, "instructions": instructions, "separator": separator,
+    record = {"version": 5, "instructions": instructions, "separator": separator,
+              "hook_entry": hook_entry, "hooks_before": hooks_before,
               "block": BLOCK, "hashes": {name: digest(content) for name, content in assets.items()}}
-    proposed = {**assets, **hook_changes, instructions: updated.encode("utf-8"),
+    proposed = {**assets, "hooks.json": hook_data, instructions: updated.encode("utf-8"),
                 STATE: (json.dumps(record, indent=2) + "\n").encode("utf-8")}
     changes = {name: data for name, data in proposed.items()
                if not target(root, name).exists() or target(root, name).read_bytes() != data}
@@ -249,7 +251,8 @@ def install(root, dry_run=False, allow_luna=False):
         print(f"{'Would archive' if dry_run else 'Archive retired asset'}: {root / name}")
     if not dry_run:
         save(root, changes, retired)
-        print("Installed. Start a new Codex task. Your main model, config, and sign-in are unchanged.")
+        print("Installed. Open Codex /hooks, review and trust the Kirby entry, then start a new task.")
+        print("The read guard is inactive until trusted. Your main model, config, and sign-in are unchanged.")
 
 
 def uninstall(root, dry_run=False):
@@ -258,7 +261,10 @@ def uninstall(root, dry_run=False):
         print("Kirby is not installed.")
         return
     check_owned(root, state)
-    hook_changes = retired_hook_changes(root, state)
+    hook_data = None
+    if state.get("hook_entry"):
+        target(root, "hooks.json")
+        hook_data, _ = hook_config.prepare(root, state)
     relative = state["instructions"]
     path = target(root, relative)
     text = route_text(path)
@@ -277,10 +283,13 @@ def uninstall(root, dry_run=False):
     dest = backup / relative
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(path, dest)
-    for name, content in hook_changes.items():
-        hook_path = target(root, name)
-        shutil.copy2(hook_path, backup / name)
-        hook_path.write_bytes(content)
+    if hook_data is not None:
+        hook_path = root / "hooks.json"
+        shutil.copy2(hook_path, backup / "hooks.json")
+        if state.get("hooks_before") is None and json.loads(hook_data) == {}:
+            hook_path.unlink()  # the file only existed because Kirby created it
+        else:
+            hook_path.write_bytes(hook_data)
     path.write_bytes(updated.encode("utf-8"))
     for name in (*state["hashes"], STATE):
         archived = backup / name
@@ -299,9 +308,13 @@ def status(root, dry_run=False):
     override = target(root, "AGENTS.override.md")
     if state["instructions"] == "AGENTS.md" and override.exists() and override.stat().st_size:
         raise InstallError("Routing is shadowed by AGENTS.override.md; uninstall and reinstall.")
-    method = "native Luna subagents with optional CLI" if state["version"] == 4 else "legacy installation; run install to migrate"
+    if state.get("hook_entry"):
+        target(root, "hooks.json")
+        hook_config.prepare(root, state)  # raises if the recorded entry was changed or removed
+    method = ("native Luna subagents, read hook, and optional CLI" if state["version"] == 5
+              else "legacy installation; run install to migrate")
     print(f"Installed: {method} and kirby-luna skill under {root}")
-    routing = "legacy blocking read hook" if state["version"] == 3 else "advisory; no blocking hooks"
+    routing = "blocking read hook; trust it in /hooks" if state.get("hook_entry") else "advisory; no blocking hooks"
     print(f"Routing: {state['instructions']} ({routing})")
     print(f"Direct Luna command allow rule: {'enabled' if RULE in state['hashes'] else 'disabled'}")
     print("Account/model availability is not checked. Start a new task and run the native smoke test.")

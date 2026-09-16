@@ -5,11 +5,16 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
-SPEC = importlib.util.spec_from_file_location("kirby_install", Path(__file__).parents[1] / "install.py")
+SOURCE = Path(__file__).parents[1]
+sys.path.insert(0, str(SOURCE))
+import hook_config
+
+SPEC = importlib.util.spec_from_file_location("kirby_install", SOURCE / "install.py")
 installer = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(installer)
 
@@ -19,7 +24,8 @@ class InstallerTests(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix="kirby-test-")).resolve()
 
     def run_action(self, action, *args):
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        self.stdout = io.StringIO()
+        with contextlib.redirect_stdout(self.stdout), contextlib.redirect_stderr(io.StringIO()):
             return installer.main([action, "--codex-home", str(self.root), *args])
 
     def test_install_preserves_config_and_auth(self):
@@ -200,7 +206,7 @@ class InstallerTests(unittest.TestCase):
     def test_legacy_native_install_migrates_and_backs_up_agents(self):
         self.legacy_install()
         self.assertEqual(self.run_action("install"), 0)
-        self.assertEqual(json.loads((self.root / installer.STATE).read_text())["version"], 4)
+        self.assertEqual(json.loads((self.root / installer.STATE).read_text())["version"], 5)
         for name in installer.LEGACY_ASSETS[:2]:
             self.assertIn('model = "gpt-5.6-luna"', (self.root / name).read_text())
             self.assertTrue(list((self.root / "kirby/backups").glob(f"*/{name}")))
@@ -246,20 +252,41 @@ class InstallerTests(unittest.TestCase):
         self.cli_install(version=2)
         self.assertEqual(self.run_action("install"), 0)
         self.assertEqual(self.run_action("status"), 0)
-        self.assertEqual(json.loads((self.root / installer.STATE).read_text())["version"], 4)
+        self.assertEqual(json.loads((self.root / installer.STATE).read_text())["version"], 5)
         self.assertIn("native Codex Luna subagents", (self.root / "AGENTS.md").read_text())
+        self.assertIn("kirby_luna_bulk_reader", (self.root / "AGENTS.md").read_text())
         self.assertNotIn("Old mandatory CLI", (self.root / "AGENTS.md").read_text())
+        self.assertEqual(self.kirby_hooks(), 1)
+
+    def kirby_hooks(self):
+        config = json.loads((self.root / "hooks.json").read_text())
+        return sum(1 for entry in config.get("hooks", {}).get("PreToolUse", [])
+                   if any(h.get("statusMessage") == hook_config.STATUS for h in entry.get("hooks", [])))
+
+    def test_fresh_install_registers_hook_and_uninstall_removes_the_file(self):
+        self.assertEqual(self.run_action("install"), 0)
+        self.assertEqual(self.kirby_hooks(), 1)
+        entry = json.loads((self.root / installer.STATE).read_text())["hook_entry"]
+        self.assertIn(str(self.root / installer.READ_HOOK), entry["hooks"][0]["command"])
+        self.assertIn("Kirby entry", self.stdout.getvalue())
+        self.assertEqual(self.run_action("status"), 0)
+        self.assertIn("blocking read hook", self.stdout.getvalue())
+        self.assertEqual(self.run_action("uninstall"), 0)
         self.assertFalse((self.root / "hooks.json").exists())
+        self.assertTrue(list((self.root / "kirby/backups").glob("*/hooks.json")))
 
     def test_v3_migration_preserves_unrelated_hooks_and_backs_up(self):
         self.cli_install(unrelated=True)
         original = (self.root / "hooks.json").read_bytes()
         self.assertEqual(self.run_action("install"), 0)
         config = json.loads((self.root / "hooks.json").read_text())
-        self.assertEqual(config, {"custom": True, "hooks": {
-            "PreToolUse": [{"matcher": "Other", "hooks": []}],
-            "PostToolUse": [{"matcher": "Other", "hooks": []}]}})
-        self.assertFalse((self.root / installer.READ_HOOK).exists())
+        self.assertEqual(config["custom"], True)
+        self.assertEqual(config["hooks"]["PostToolUse"], [{"matcher": "Other", "hooks": []}])
+        self.assertEqual(config["hooks"]["PreToolUse"][0], {"matcher": "Other", "hooks": []})
+        self.assertEqual(len(config["hooks"]["PreToolUse"]), 2)
+        self.assertEqual(self.kirby_hooks(), 1)
+        self.assertEqual((self.root / installer.READ_HOOK).read_bytes(),
+                         (SOURCE / "read_hook.py").read_bytes().replace(b"\r\n", b"\n"))
         backup = next((self.root / "kirby/backups").glob("*/hooks.json"))
         self.assertEqual(backup.read_bytes(), original)
         self.assertTrue(list((self.root / "kirby/backups").glob(f"*/{installer.READ_HOOK}")))
@@ -267,11 +294,17 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(self.run_action("install"), 0)
         self.assertEqual(before, {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*") if p.is_file()})
         self.assertEqual(self.run_action("uninstall"), 0)
-        self.assertEqual(json.loads((self.root / "hooks.json").read_text()), config)
+        self.assertEqual(json.loads((self.root / "hooks.json").read_text()), {"custom": True, "hooks": {
+            "PreToolUse": [{"matcher": "Other", "hooks": []}],
+            "PostToolUse": [{"matcher": "Other", "hooks": []}]}})
 
-    def test_v3_migration_restores_empty_hook_config(self):
+    def test_v3_migration_replaces_hook_and_uninstall_restores_empty_config(self):
         self.cli_install()
         self.assertEqual(self.run_action("install"), 0)
+        config = json.loads((self.root / "hooks.json").read_text())
+        self.assertEqual(len(config["hooks"]["PreToolUse"]), 1)
+        self.assertEqual(self.kirby_hooks(), 1)
+        self.assertEqual(self.run_action("uninstall"), 0)
         self.assertEqual((self.root / "hooks.json").read_bytes(), b"{}\n")
 
     def test_v3_windows_routing_migrates_without_losing_user_text(self):
