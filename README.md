@@ -18,6 +18,10 @@ claude plugin marketplace add bgigurtsis/kirby
 claude plugin install kirby@kirby
 ```
 
+Start a new session and pick "always allow" the first time Claude calls
+`kirby_read`, or add `mcp__plugin_kirby_kirby__kirby_read` to `permissions.allow`
+in `~/.claude/settings.json` (see [the guide](docs/claude-code.md#setup)).
+
 **Codex** - requires Python 3.11+, a current Codex client, and Luna access:
 
 ```sh

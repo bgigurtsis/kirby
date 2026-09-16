@@ -13,7 +13,13 @@ claude plugin marketplace add bgigurtsis/kirby
 claude plugin install kirby@kirby
 ```
 
-Start a new Claude Code session. That's it.
+Start a new Claude Code session. The first time Claude calls `kirby_read`, pick "always allow" at the prompt, or add the rule to `~/.claude/settings.json` up front:
+
+```json
+{ "permissions": { "allow": ["mcp__plugin_kirby_kirby__kirby_read"] } }
+```
+
+Without that rule a permission prompt sits between the model and the delegate, and headless runs (`claude -p`) refuse the tool outright, so the model falls back to slices under the threshold. `kirby_write` writes files, so leave it behind the prompt.
 
 ## What it does
 
