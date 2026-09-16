@@ -47,7 +47,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 HERE = Path(__file__).resolve().parent
 MIN_LINES = int(os.environ.get("KIRBY_MIN_LINES", "200"))
 READ_TOOL_MAX = 2000  # lines Claude Code's Read tool returns when no limit is given
@@ -585,6 +585,9 @@ def cmd_mcp(_: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    for stream in (sys.stdout, sys.stderr):  # worker text is UTF-8 whatever the console codepage is
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(prog="kirby", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)

@@ -154,6 +154,9 @@ def run(args):
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):  # worker text is UTF-8 whatever the console codepage is
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
     parser.add_argument("--codex-bin")
