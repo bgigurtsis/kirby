@@ -31,12 +31,14 @@ Three things make the model reach for kirby. Each closes a gap the previous vers
 
 ```bash
 python "$CLAUDE_PLUGIN_ROOT/scripts/kirby.py" read --question "Which functions touch the database?" --paths src/service.py src/handler.py
-python "$CLAUDE_PLUGIN_ROOT/scripts/kirby.py" write --spec "Copy the reference test with only the literal label orders replaced by users" --reference tests/test_orders.py --context src/users.py --target tests/test_users.py
+python "$CLAUDE_PLUGIN_ROOT/scripts/kirby.py" write --reference tests/test_orders.py --target tests/test_users.py --sub Order User --sub orders users
 ```
 
 **Hooks that block the alternatives.** Before every Read, Bash, and PowerShell call a hook refuses anything that would put more than 200 lines into context, and the refusal names `kirby_read` as the way through. That covers whole-file Reads and Read windows over the limit; `cat`, `type`, `less`, `more`, and `Get-Content`; `head` and `tail` with a large count; `sed -n` ranges and `sed` without `-n`. The Bash hook follows `cd` inside the command, expands globs, adds up several files, treats `2>&1` as still printing, and understands Git Bash `/c/` paths on Windows. Output that goes to a pipe or a file is not counted.
 
-`kirby_read` sends files plus a question to the worker and returns a short bulleted answer. Ask again with the same files for follow-ups. The files never enter your main context. `kirby_write` generates boilerplate from a spec and a reference file, then writes it straight to disk. Claude must review the generated diff before accepting it.
+`kirby_read` sends files plus a question to the worker and returns a short bulleted answer. The worker quotes the lines that answer the question. kirby then searches the files for each quoted line and appends its file and line number, so Claude can go straight to a ranged Read. The worker's own line numbers were unreliable in testing, which is why code does the lookup. The files go in the worker's system prompt, which the worker caches, so a follow-up question about the same files reads them from cache. The files never enter your main context.
+
+`kirby_write` makes a new file from a reference file and writes it straight to disk. Given a list of literal substitutions, it copies in code with no model call. Given a spec instead, the worker retypes the file. Both return a diff against the reference, which Claude must review before accepting the file.
 
 ## Settings
 
@@ -49,6 +51,17 @@ Set these in your shell or in the `env` block of `~/.claude/settings.json`.
 | `KIRBY_MODEL` | `haiku` | Worker model for the `claude` backend, any value `claude --model` accepts |
 | `KIRBY_DISABLE` | unset | Set to `1` to switch the hooks and the session rule off |
 | `KIRBY_CLAUDE_BIN` | auto | Path to `claude` if it isn't on your PATH |
+
+## Which model answers
+
+The usage line at the end of every answer names the model that ran, for example `model=claude-haiku-5-5`. Check it once after installing.
+
+`KIRBY_MODEL` defaults to the alias `haiku`, and each `claude` binary decides what that alias means. The `kirby_read` and `kirby_write` tools run inside an MCP server, which does not receive `CLAUDE_CODE_EXECPATH`, so they use the `claude` on your PATH. If that binary is older than the one running your session, `haiku` can mean an older model. In one test a PATH binary at 2.1.288 chose `claude-haiku-4-5-20251001` while the session's own 2.1.317 chose `claude-haiku-5-5`, and the older model cost about eight times as much for the same question.
+
+Two fixes, either one:
+
+- Update the `claude` on your PATH.
+- Set `KIRBY_MODEL` to a full model id, or `KIRBY_CLAUDE_BIN` to the binary you want, in the `env` block of `~/.claude/settings.json`.
 
 ## Using Luna with an OpenAI API key
 
@@ -65,12 +78,12 @@ Optional overrides: `KIRBY_OPENAI_MODEL` (default `gpt-5.6-luna`), `KIRBY_OPENAI
 
 ## What it doesn't do
 
-- **Edits.** The worker's summaries don't carry reliable line numbers. Ask it where something lives, then grep and do a targeted read before editing.
+- **Edits.** The worker answers questions about a file and never changes one. Ask it where something lives, then do a targeted read of the lines it cites before editing.
 - **Reasoning.** Debugging, architecture, and security-sensitive code stay with your main model. The skills say so.
 - **Small files.** Below the threshold, delegation costs more time than it saves.
 - **Sessions that skip user settings.** The Claude Agent SDK and `claude -p --setting-sources ""` do not load plugins, so nothing here applies to them.
 
-Each call is a round trip through the Claude Code CLI. Reads take around 7 seconds. Generating a whole file can take a minute or two.
+Each worker call is a round trip through the Claude Code CLI. A one-bullet answer about a 600-line file took about 4 seconds in testing. Time grows with the length of the answer, so narrow questions are faster. A worker copy retypes the whole file and can take a minute or two. A literal copy with substitutions makes no model call.
 
 ## Development
 
